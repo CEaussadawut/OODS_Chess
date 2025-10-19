@@ -1,54 +1,168 @@
-from flask import Flask, render_template, request
+from flask import Flask, jsonify, render_template, request
+
 import engine
-import os
 
-app = Flask(__name__, 
-			template_folder='../templates',
-			static_folder='../static')
 
-board = []
+EMPTY_FEN = "8/8/8/8/8/8/8/8"
+DEFAULT_BOARD_ID = 0
 
-@app.route('/')
+app = Flask(
+    __name__, template_folder="../templates", static_folder="../static"
+)
+
+boards = {}
+
+
+def _normalize_board_id(raw_id):
+    if raw_id is None or raw_id == "":
+        return DEFAULT_BOARD_ID
+
+    try:
+        return int(raw_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Invalid board id") from exc
+
+
+def _get_board(board_id):
+    if board_id not in boards:
+        boards[board_id] = engine.Chessboard("start")
+    return boards[board_id]
+
+
+@app.route("/")
 def chess_game():
-	return render_template('index.html')
+    return render_template("index.html")
 
-@app.route('/api/create_board', methods=['POST'])
+
+@app.route("/api/create_board", methods=["POST"])
 def create_board():
-	board_id = int(request.form.get('id'))
-	while len(board) <= board_id:
-		board.append(None)
-	board[board_id] = engine.Chessboard('start')
-	print(board_id)
-	return {'fen': board[board_id].fen}
+    raw_id = request.form.get("id")
 
-@app.route('/api/start_position', methods=['GET'])
+    try:
+        if raw_id is None or raw_id == "":
+            board_id = max(boards.keys(), default=-1) + 1
+        else:
+            board_id = _normalize_board_id(raw_id)
+    except ValueError:
+        return jsonify({"error": "Invalid board id"}), 400
+
+    boards[board_id] = engine.Chessboard("start")
+    board = boards[board_id]
+    return (
+        jsonify(
+            {
+                "id": board_id,
+                "fen": board.fen,
+                "history": board.get_history(),
+                "position": board.current_index,
+            }
+        ),
+        201,
+    )
+
+
+@app.route("/api/start_position", methods=["GET"])
 def start_position():
-	fen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR'
+    return jsonify({"fen": engine.START_FEN})
 
-	return {'fen': fen}
 
-@app.route('/api/clear', methods=['GET'])
+@app.route("/api/clear", methods=["GET"])
 def clear():
-	fen = '8/8/8/8/8/8/8/8'
-	return {'fen': fen}
+    return jsonify({"fen": EMPTY_FEN})
 
-@app.route('/api/make_move', methods=['POST'])
+
+@app.route("/api/make_move", methods=["POST"])
 def make_move():
-	board_id = int(request.form.get('id'))
-	fen = request.form.get('fen')
-	print('fen:', fen)
-	print('id:', board_id)
-	board[board_id].pushHistory(fen)
-	print(board[board_id].history)
-	return {'fen': 'make move'}
+    raw_id = request.form.get("id")
+    fen = request.form.get("fen", "").strip()
+
+    try:
+        board_id = _normalize_board_id(raw_id)
+    except ValueError:
+        return jsonify({"error": "Invalid board id"}), 400
+
+    board = _get_board(board_id)
+
+    if not fen:
+        return jsonify({"error": "Missing FEN"}), 400
+
+    try:
+        updated_fen = board.pushHistory(fen)
+    except ValueError:
+        return jsonify({"error": "Invalid FEN"}), 400
+
+    return jsonify(
+        {
+            "fen": updated_fen,
+            "history": board.get_history(),
+            "position": board.current_index,
+        }
+    )
 
 
-@app.route('/api/valid_check', methods=['POST'])
+@app.route("/api/valid_check", methods=["POST"])
 def valid_check():
-	fen = request.form.get('fen')
-	print('fen:', fen)
-	board2 = engine.Chessboard(fen)
-	return {'fen': 'make move'}
+    fen = request.form.get("fen", "").strip()
+    if not fen:
+        return jsonify({"error": "Missing FEN"}), 400
 
-if __name__ == '__main__':
-	app.run(debug=True, threaded=True)
+    try:
+        engine.Chessboard(fen)
+    except ValueError:
+        return jsonify({"fen": fen, "valid": False}), 200
+
+    return jsonify({"fen": fen, "valid": True})
+
+
+@app.route("/api/history/<int:board_id>", methods=["GET"])
+def history(board_id):
+    if board_id not in boards:
+        return jsonify({"error": "Board not found"}), 404
+
+    board = boards[board_id]
+    return jsonify(
+        {
+            "id": board_id,
+            "fen": board.fen,
+            "history": board.get_history(),
+            "position": board.current_index,
+        }
+    )
+
+
+@app.route("/api/rewind", methods=["POST"])
+def rewind():
+    raw_id = request.form.get("id")
+
+    try:
+        board_id = _normalize_board_id(raw_id)
+    except ValueError:
+        return jsonify({"error": "Invalid board id"}), 400
+
+    if board_id not in boards:
+        return jsonify({"error": "Board not found"}), 404
+
+    board = boards[board_id]
+    fen = board.rewind()
+    return jsonify({"fen": fen, "position": board.current_index})
+
+
+@app.route("/api/forward", methods=["POST"])
+def forward():
+    raw_id = request.form.get("id")
+
+    try:
+        board_id = _normalize_board_id(raw_id)
+    except ValueError:
+        return jsonify({"error": "Invalid board id"}), 400
+
+    if board_id not in boards:
+        return jsonify({"error": "Board not found"}), 404
+
+    board = boards[board_id]
+    fen = board.forward()
+    return jsonify({"fen": fen, "position": board.current_index})
+
+
+if __name__ == "__main__":
+    app.run(debug=True, threaded=True)
