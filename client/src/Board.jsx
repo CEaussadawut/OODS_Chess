@@ -23,13 +23,26 @@ function Board({ boardId }){
 	useEffect(() => {
 		// Initialize chessboard after component mounts
 		if (window.Chessboard && boardRef.current && !boardInstance.current) {
-			const onDrop = (source, target) => {
-				const newFen = boardInstance.current.fen();
-				pushHistoryEntry(newFen);
-				$.post('/api/make_move', {'fen': boardInstance.current.fen(), 'id': boardId}, function() {
-					console.log('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
-				});
-			};
+                        const onDrop = (source, target, piece, newPos) => {
+                                if (!boardInstance.current) {
+                                        return;
+                                }
+
+                                const fenFromDrop = window.Chessboard && typeof window.Chessboard.objToFen === 'function'
+                                        ? window.Chessboard.objToFen(newPos)
+                                        : boardInstance.current.fen();
+
+                                if (fenFromDrop) {
+                                        // Ensure the board reflects the dropped position immediately
+                                        boardInstance.current.position(fenFromDrop);
+                                        pushHistoryEntry(fenFromDrop);
+                                        $.post('/api/make_move', { fen: fenFromDrop, id: boardId }, function() {
+                                                console.log('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~');
+                                        });
+                                }
+
+                                console.log('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
+                        };
 
 			boardInstance.current = Chessboard(boardRef.current, {
 				draggable: true,
