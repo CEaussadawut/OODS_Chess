@@ -12,7 +12,7 @@ function App() {
         setBoards([...boards, { id: newBoardId }]);
         setBoardCount(newBoardId); // Update the counter
         console.log(newBoardId); // Log the new board ID
-		$.post('/api/make_move', {'id': Chessboard.objToFen(newPos)}, function(data) {
+		$.post('/api/create_board', {'id': newBoardId}, function(data) {
 			console.log('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
 		});
     }

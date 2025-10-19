@@ -6,34 +6,40 @@ app = Flask(__name__,
 			template_folder='../templates',
 			static_folder='../static')
 
+board = []
+
 @app.route('/')
 def chess_game():
 	return render_template('index.html')
 
 @app.route('/api/create_board', methods=['POST'])
 def create_board():
-	fen = request.form.get('fen')
-	board = engine.Chessboard(fen)
-	return {'fen': board.fen}
+	board_id = int(request.form.get('id'))
+	while len(board) <= board_id:
+		board.append(None)
+	board[board_id] = engine.Chessboard('start')
+	print(board_id)
+	return {'fen': board[board_id].fen}
 
 @app.route('/api/start_position', methods=['GET'])
 def start_position():
 	fen = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR'
-	# board = engine.Chessboard(fen)
+
 	return {'fen': fen}
 
-@app.route('/api/clear', methods=['POST'])
+@app.route('/api/clear', methods=['GET'])
 def clear():
-	fen = request.form.get('fen')
-	print('fen:', fen)
-	board1 = engine.Chessboard(fen)
-	return {'fen': 'make move'}
+	fen = '8/8/8/8/8/8/8/8'
+	return {'fen': fen}
 
 @app.route('/api/make_move', methods=['POST'])
 def make_move():
+	board_id = int(request.form.get('id'))
 	fen = request.form.get('fen')
 	print('fen:', fen)
-	board1 = engine.Chessboard(fen)
+	print('id:', board_id)
+	board[board_id].pushHistory(fen)
+	print(board[board_id].history)
 	return {'fen': 'make move'}
 
 

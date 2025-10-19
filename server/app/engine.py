@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from abc import ABC, abstractmethod
-
+# History: stack
+# Manipulate: 8x8 matrix
+# store and communicate: list
 types = {
 	1: 'fen',
 	2: 'matrix',
@@ -14,24 +16,24 @@ class Chessboard:
 			fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"
 		self.fen = fen
 		self.matrix = None
-		self.dict = None
-		
+		self.history = []
+	
+	def pushHistory(self, fen):
+		self.history.append(fen)
+
+	def popHistory(self, fen):
+		pass		
+
 	def fenToMatrix(self, fen):
 		pass
 	
-	def fenToDict(self, fen):
-		pass
-
-	def fenToHash(self, fen):
-		pass
-
 	def matrixToFen(self, matrix):
 		pass
-
-	def dictToFen(self, matrix):
+	
+	def rewind(self):
 		pass
 
-	def hashToFen(self, dict):
+	def forward(self):
 		pass
 
 	def validFen(self, fen):
@@ -69,8 +71,6 @@ class pawn(piece):
 		self.moves = self.move()
 		self.move_ables = self.move_able()
 
-
-	
 	def move(self):
 		return [[-1,-1],[1,1]]
 
