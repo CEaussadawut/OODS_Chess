@@ -1,56 +1,119 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
-function Board({ boardId }){
+function Board({ boardId, initialState }) {
 	const boardRef = useRef(null);
 	const boardInstance = useRef(null);
-	const [fen, setFen] = useState(''); // State for FEN
-	const [history, setHistory] = useState([]); // State for move history
-	const [currentHistoryIndex, setCurrentHistoryIndex] = useState(-1); // Track current history position
-	const historyRef = useRef(null); // Ref for the history container
-	const historyIndexRef = useRef(-1); // Mirror of currentHistoryIndex for stale closure avoidance
+	const lastServerFen = useRef('');
+	const serverHistoryRef = useRef([]);
+	const [fen, setFen] = useState('');
+	const [history, setHistory] = useState([]);
+	const [currentHistoryIndex, setCurrentHistoryIndex] = useState(-1);
+	const historyContainerRef = useRef(null);
 
-	const pushHistoryEntry = (fenString) => {
-		setHistory(prevHistory => {
-			const cutoff = historyIndexRef.current + 1;
-			const truncated = cutoff > 0 ? prevHistory.slice(0, cutoff) : [];
-			const updated = [...truncated, fenString];
-			historyIndexRef.current = updated.length - 1;
-			setCurrentHistoryIndex(historyIndexRef.current);
-			return updated;
-		});
-	};
+	const syncFromServer = useCallback((payload, fallbackHistory) => {
+		if (!payload || payload.error) {
+			console.error('Failed to sync board state', payload?.error);
+			return;
+		}
+
+		let serverHistory;
+		if (Array.isArray(payload.history)) {
+			serverHistory = payload.history;
+		} else if (Array.isArray(fallbackHistory)) {
+			serverHistory = fallbackHistory;
+		} else {
+			serverHistory = serverHistoryRef.current;
+		}
+
+		if (!Array.isArray(serverHistory)) {
+			serverHistory = [];
+		}
+
+		const nextIndex = typeof payload.position === 'number'
+			? payload.position
+			: serverHistory.length - 1;
+		const nextFen = payload.fen || (serverHistory[nextIndex] ?? '');
+
+		serverHistoryRef.current = serverHistory;
+		setHistory(serverHistory);
+		setCurrentHistoryIndex(nextIndex);
+		setFen(nextFen);
+		lastServerFen.current = nextFen;
+
+		if (boardInstance.current && nextFen) {
+			boardInstance.current.position(nextFen);
+		}
+	}, []);
+
+	const loadBoard = useCallback(() => {
+		return $.ajax({
+			url: `/api/history/${boardId}`,
+			method: 'GET',
+			dataType: 'json'
+		})
+			.done((data) => {
+				syncFromServer(data);
+			})
+			.fail((jqXHR) => {
+				console.error(`Unable to load board ${boardId}`, jqXHR.responseJSON || jqXHR.responseText);
+			});
+	}, [boardId, syncFromServer]);
 
 	useEffect(() => {
-		// Initialize chessboard after component mounts
+		if (initialState) {
+			syncFromServer(initialState);
+		} else {
+			loadBoard();
+		}
+	}, [initialState, loadBoard, syncFromServer]);
+
+	useEffect(() => {
 		if (window.Chessboard && boardRef.current && !boardInstance.current) {
-                        const onDrop = (source, target, piece, newPos) => {
-                                if (!boardInstance.current) {
-                                        return;
-                                }
+			const onDrop = (source, target, piece, newPos) => {
+				if (!boardInstance.current) {
+					return;
+				}
 
-                                const fenFromDrop = window.Chessboard && typeof window.Chessboard.objToFen === 'function'
-                                        ? window.Chessboard.objToFen(newPos)
-                                        : boardInstance.current.fen();
+				const fenFromDrop = window.Chessboard && typeof window.Chessboard.objToFen === 'function'
+					? window.Chessboard.objToFen(newPos)
+					: boardInstance.current.fen();
 
-                                if (fenFromDrop) {
-                                        // Ensure the board reflects the dropped position immediately
-                                        boardInstance.current.position(fenFromDrop);
-                                        pushHistoryEntry(fenFromDrop);
-                                        $.post('/api/make_move', { fen: fenFromDrop, id: boardId }, function() {
-                                                console.log('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~');
-                                        });
-                                }
+				if (!fenFromDrop) {
+					return;
+				}
 
-                                console.log('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
-                        };
+				boardInstance.current.position(fenFromDrop);
+
+				$.ajax({
+					url: '/api/make_move',
+					method: 'POST',
+					data: { fen: fenFromDrop, id: boardId },
+					dataType: 'json'
+				})
+					.done((data) => {
+						syncFromServer(data);
+					})
+					.fail((jqXHR) => {
+						console.error('Failed to save move', jqXHR.responseJSON || jqXHR.responseText);
+						if (boardInstance.current && lastServerFen.current) {
+							boardInstance.current.position(lastServerFen.current);
+						}
+					});
+			};
 
 			boardInstance.current = Chessboard(boardRef.current, {
 				draggable: true,
 				dropOffBoard: 'trash',
 				sparePieces: true,
 				pieceTheme: '/pieces/{piece}.png',
-				onDrop: onDrop
+				onDrop
 			});
+
+			if (lastServerFen.current) {
+				boardInstance.current.position(lastServerFen.current);
+			} else {
+				loadBoard();
+			}
 		}
 
 		return () => {
@@ -59,96 +122,110 @@ function Board({ boardId }){
 				boardInstance.current = null;
 			}
 		};
-	}, [boardId]); // Removed history from dependencies
+	}, [boardId, loadBoard, syncFromServer]);
 
 	useEffect(() => {
-		if (currentHistoryIndex >= 0 && history[currentHistoryIndex]) {
-			const targetFen = history[currentHistoryIndex];
-			if (boardInstance.current) {
-				boardInstance.current.position(targetFen);
-			}
-			setFen(targetFen);
-		} else {
-			setFen('');
-		}
-	}, [currentHistoryIndex, history]);
-
-	useEffect(() => {
-		// Scroll to the bottom of the history container whenever history updates
-		if (historyRef.current) {
-			historyRef.current.scrollTop = historyRef.current.scrollHeight;
+		if (historyContainerRef.current) {
+			historyContainerRef.current.scrollTop = historyContainerRef.current.scrollHeight;
 		}
 	}, [history]);
 
 	const handleStart = () => {
-		if (boardInstance.current) {
-		$.get('/api/start_position', function(data) {
-			// Assume your Flask backend returns { fen: "FEN_STRING" }
-			if (data && data.fen) {
-				boardInstance.current.position(data.fen); // Set board to FEN from backend
-				pushHistoryEntry(data.fen); // Optionally add to history
-				}
+		$.ajax({
+			url: '/api/create_board',
+			method: 'POST',
+			data: { id: boardId },
+			dataType: 'json'
+		})
+			.done((data) => {
+				syncFromServer(data);
+			})
+			.fail((jqXHR) => {
+				console.error('Unable to reset board', jqXHR.responseJSON || jqXHR.responseText);
 			});
-		}
 	};
 
 	const handleClear = () => {
-		if (boardInstance.current) {
-		$.get('/api/clear', function(data) {
-			// Assume your Flask backend returns { fen: "FEN_STRING" }
-			if (data && data.fen) {
-				boardInstance.current.position(data.fen); // Set board to FEN from backend
-				setFen(''); // Reset FEN on clear
-				setHistory([]); // Clear history on reset
-				historyIndexRef.current = -1;
-				setCurrentHistoryIndex(-1);
+		$.ajax({
+			url: '/api/clear',
+			method: 'GET',
+			dataType: 'json'
+		})
+			.done((data) => {
+				if (!data || !data.fen) {
+					console.error('Missing clear FEN');
+					return;
 				}
+
+				$.ajax({
+					url: '/api/make_move',
+					method: 'POST',
+					data: { fen: data.fen, id: boardId },
+					dataType: 'json'
+				})
+					.done((response) => {
+						syncFromServer(response);
+					})
+					.fail((jqXHR) => {
+						console.error('Unable to clear board', jqXHR.responseJSON || jqXHR.responseText);
+						if (boardInstance.current && lastServerFen.current) {
+							boardInstance.current.position(lastServerFen.current);
+						}
+					});
+			})
+			.fail((jqXHR) => {
+				console.error('Unable to fetch clear FEN', jqXHR.responseJSON || jqXHR.responseText);
 			});
-		}
 	};
 
 	const handleRewind = () => {
-		setCurrentHistoryIndex(prevIndex => {
-			if (prevIndex > 0) {
-				const nextIndex = prevIndex - 1;
-				historyIndexRef.current = nextIndex;
-				return nextIndex;
-			}
-			historyIndexRef.current = prevIndex;
-			return prevIndex;
-		});
+		$.ajax({
+			url: '/api/rewind',
+			method: 'POST',
+			data: { id: boardId },
+			dataType: 'json'
+		})
+			.done((data) => {
+				syncFromServer(data, serverHistoryRef.current);
+			})
+			.fail((jqXHR) => {
+				console.error('Unable to rewind', jqXHR.responseJSON || jqXHR.responseText);
+			});
 	};
 
 	const handleNext = () => {
-		setCurrentHistoryIndex(prevIndex => {
-			if (prevIndex < history.length - 1) {
-				const nextIndex = prevIndex + 1;
-				historyIndexRef.current = nextIndex;
-				return nextIndex;
-			}
-			historyIndexRef.current = prevIndex;
-			return prevIndex;
-		});
+		$.ajax({
+			url: '/api/forward',
+			method: 'POST',
+			data: { id: boardId },
+			dataType: 'json'
+		})
+			.done((data) => {
+				syncFromServer(data, serverHistoryRef.current);
+			})
+			.fail((jqXHR) => {
+				console.error('Unable to step forward', jqXHR.responseJSON || jqXHR.responseText);
+			});
 	};
 
 	const canRewind = currentHistoryIndex > 0;
 	const canAdvance = currentHistoryIndex >= 0 && currentHistoryIndex < history.length - 1;
 
-	return(
-		<div style={{display: 'flex', flexDirection: 'row', alignItems: 'flex-start', gap: '20px', marginBottom: '20px'}}>
-			<div style={{display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px'}}>
-				<div ref={boardRef} style={{width: '400px'}}></div>
-				<div style={{display: 'flex', gap: '10px'}}>
+	return (
+		<div style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-start', gap: '20px', marginBottom: '20px' }}>
+			<div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px' }}>
+				<div ref={boardRef} style={{ width: '400px' }}></div>
+				<div style={{ display: 'flex', gap: '10px' }}>
 					<button onClick={handleStart}>Start Position</button>
 					<button onClick={handleClear}>Clear Board</button>
 					<button id={`validBtn-${boardId}`}>Check Valid</button>
 				</div>
 			</div>
-			<div style={{display: 'flex', flexDirection: 'column', alignItems: 'flex-start'}}>
+			<div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
 				<h3>FEN:</h3>
-				<pre>{fen}</pre> {/* Display FEN in a preformatted text block */}
+				<pre>{fen}</pre>
 				<h4>History:</h4>
-				<div ref={historyRef} style={{ maxHeight: '300px', overflowY: 'auto', border: '1px solid #ccc', padding: '5px', width: '450px' }}>
+				<div ref={historyContainerRef} style={{ maxHeight: '300px', overflowY: 'auto', border: '1px solid #ccc', padding: '5px', width: '450px' }}>
 					<ul>
 						{history.map((fenString, index) => (
 							<li
@@ -168,4 +245,5 @@ function Board({ boardId }){
 		</div>
 	);
 }
+
 export default Board;
