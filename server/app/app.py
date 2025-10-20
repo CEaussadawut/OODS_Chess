@@ -88,9 +88,13 @@ def make_move():
 
     try:
         updated_fen = board.pushHistory(fen)
+        print(board.history)
+        board.fenToMatrix()
+        print("fen:",board.fen)
+        board.displayMatrix()
+        print(board.matrixToFen())
     except ValueError:
         return jsonify({"error": "Invalid FEN"}), 400
-
     return jsonify(
         {
             "fen": updated_fen,
